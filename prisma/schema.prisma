@@ -1,0 +1,29 @@
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum LogLevel {
+  debug
+  info
+  warn
+  error
+}
+
+model Log {
+  id         String   @id @default(uuid()) @db.Uuid
+  timestamp  DateTime
+  level      LogLevel
+  service    String
+  message    String
+  attributes Json
+  createdAt  DateTime @default(now())
+
+  @@index([timestamp(sort: Desc), id(sort: Desc)])
+  @@index([service])
+  @@index([level])
+}
