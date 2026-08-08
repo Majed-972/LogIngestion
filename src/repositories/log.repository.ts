@@ -19,8 +19,22 @@ type AggregateOptions = {
 };
 
 export class LogRepository {
+
   async insertMany(logs: Prisma.LogCreateManyInput[]) {
-    return prisma.log.createMany({ data: logs });
+    if (logs.length === 0) return { count: 0 };
+
+    const valueTuples = logs.map(
+      (log) =>
+        Prisma.sql`(${Prisma.sql`gen_random_uuid()`}, ${log.timestamp}, ${log.level}::"LogLevel", ${log.service}, ${log.message}, ${JSON.stringify(log.attributes ?? {})}::jsonb, NOW())`
+    );
+
+    const query = Prisma.sql`
+      INSERT INTO "Log" ("id", "timestamp", "level", "service", "message", "attributes", "createdAt")
+      VALUES ${Prisma.join(valueTuples, ", ")}
+    `;
+
+    await prisma.$executeRaw(query);
+    return { count: logs.length };
   }
 
   async findMany(where: Prisma.LogWhereInput, take: number) {
