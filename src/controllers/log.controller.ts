@@ -36,24 +36,28 @@ class LogController {
   async getLogs(request: FastifyRequest, reply: FastifyReply) {
     try {
       const result = await logService.getLogs(request.query);
-
       return reply.send(result);
     } catch (error: any) {
       request.log.error(error);
 
-      if (
-        error.message === "Invalid since" ||
-        error.message === "Invalid until" ||
-        error.message === "until must be later than since"
-      ) {
-        return reply.status(400).send({
-          error: error.message,
-        });
+      const clientErrors = [
+        "limit must be a number",
+        "limit must be between 1 and 1000",
+        "Invalid since",
+        "Invalid until",
+        "until must be later than since",
+        "Invalid or malformed cursor",
+      ];
+
+      const isClientError =
+        clientErrors.some((msg) => error.message?.startsWith(msg)) ||
+        error.message?.startsWith("invalid level");
+
+      if (isClientError) {
+        return reply.status(400).send({ error: error.message });
       }
 
-      return reply.status(500).send({
-        error: "Internal Server Error",
-      });
+      return reply.status(500).send({ error: "Internal Server Error" });
     }
   }
 }

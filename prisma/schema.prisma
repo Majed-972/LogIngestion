@@ -26,4 +26,5 @@ model Log {
   @@index([timestamp(sort: Desc), id(sort: Desc)])
   @@index([service])
   @@index([level])
+  @@index([attributes], type: Gin)
 }
