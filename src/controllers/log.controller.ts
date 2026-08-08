@@ -60,6 +60,39 @@ class LogController {
       return reply.status(500).send({ error: "Internal Server Error" });
     }
   }
+
+    async aggregateLogs(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      const result = await logService.aggregateLogs(request.query);
+      return reply.send(result);
+
+    } catch (error: any) {
+      request.log.error(error);
+
+      const clientErrors = [
+        "since is required",
+        "until is required",
+        "bucket is required",
+        "Invalid since",
+        "Invalid until",
+        "until must be later than since",
+        "invalid bucket",
+        "invalid group_by",
+        "invalid level",
+      ];
+
+      const isClientError = clientErrors.some((msg) =>
+        error.message?.startsWith(msg)
+      );
+
+      if (isClientError) {
+        return reply.status(400).send({ error: error.message });
+      }
+
+      return reply.status(500).send({ error: "Internal Server Error" });
+    }
+  }
+
 }
 
 export default new LogController();
