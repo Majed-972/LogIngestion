@@ -1,4 +1,3 @@
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -24,7 +23,7 @@ model Log {
   createdAt  DateTime @default(now())
 
   @@index([timestamp(sort: Desc), id(sort: Desc)])
-  @@index([service])
-  @@index([level])
+  @@index([service, timestamp(sort: Desc)])
+  @@index([level, timestamp(sort: Desc)])
   @@index([attributes], type: Gin)
 }

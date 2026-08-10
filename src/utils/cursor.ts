@@ -1,6 +1,6 @@
 type CursorData = {
   timestamp: string;
-  id: string;     
+  id: string;
 };
 
 export function encodeCursor(timestamp: Date, id: string): string {

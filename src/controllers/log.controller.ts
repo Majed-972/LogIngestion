@@ -35,7 +35,9 @@ class LogController {
 
   async getLogs(request: FastifyRequest, reply: FastifyReply) {
     try {
-      const result = await logService.getLogs(request.query);
+      const result = await logService.getLogs(
+        request.query as Record<string, string | undefined>,
+      );
       return reply.send(result);
     } catch (error: any) {
       request.log.error(error);
@@ -61,11 +63,12 @@ class LogController {
     }
   }
 
-    async aggregateLogs(request: FastifyRequest, reply: FastifyReply) {
+  async aggregateLogs(request: FastifyRequest, reply: FastifyReply) {
     try {
-      const result = await logService.aggregateLogs(request.query);
+      const result = await logService.aggregateLogs(
+        request.query as Record<string, string | undefined>,
+      );
       return reply.send(result);
-
     } catch (error: any) {
       request.log.error(error);
 
@@ -82,7 +85,7 @@ class LogController {
       ];
 
       const isClientError = clientErrors.some((msg) =>
-        error.message?.startsWith(msg)
+        error.message?.startsWith(msg),
       );
 
       if (isClientError) {
@@ -92,7 +95,6 @@ class LogController {
       return reply.status(500).send({ error: "Internal Server Error" });
     }
   }
-
 }
 
 export default new LogController();

@@ -12,6 +12,17 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    command: >
+      postgres
+        -c shared_buffers=256MB
+        -c synchronous_commit=off
+        -c wal_buffers=16MB
+        -c checkpoint_completion_target=0.9
+        -c max_connections=200
+        -c effective_cache_size=768MB
+        -c work_mem=4MB
+        -c random_page_cost=1.1
+        -c effective_io_concurrency=200
     deploy:
       resources:
         limits:

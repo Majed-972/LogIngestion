@@ -1,57 +1,12 @@
 import { Prisma } from "@prisma/client";
-import { logSchema } from "../schemas/log.schema.js";
 import logRepository from "../repositories/log.repository.js";
 import { encodeCursor, decodeCursor } from "../utils/cursor.js";
-
-const VALID_LEVELS = ["debug", "info", "warn", "error"] as const;
+import { validateLogs } from "../validators/log.validator.js";
+import { VALID_LEVELS, type QueryParams } from "../types/log.types.js";
 
 class LogService {
   async ingestLogs(logs: unknown[]) {
-    const accepted: Prisma.LogCreateManyInput[] = [];
-    const rejected: { index: number; reason: string }[] = [];
-
-    logs.forEach((log, index) => {
-      const result = logSchema.safeParse(log);
-
-      if (!result.success) {
-        const issue = result.error.issues[0]!;
-        let reason = issue.message;
-
-        if (issue.path.includes("level")) {
-          reason = `invalid level: '${(log as any).level}'`;
-        } else if (issue.path.includes("timestamp")) {
-          reason = "invalid timestamp";
-        } else if (issue.path.includes("service")) {
-          reason = "service is required";
-        } else if (issue.path.includes("message")) {
-          reason = "message is required";
-        } else if (issue.path.includes("attributes")) {
-          reason =
-            "invalid attributes: must be a flat object with string, number, or boolean values";
-        }
-
-        rejected.push({ index, reason });
-        return;
-      }
-
-      const data = result.data;
-
-      if (new Date(data.timestamp).getTime() > Date.now() + 5 * 60 * 1000) {
-        rejected.push({
-          index,
-          reason: "timestamp is more than five minutes in the future",
-        });
-        return;
-      }
-
-      accepted.push({
-        timestamp: new Date(data.timestamp),
-        level: data.level,
-        service: data.service,
-        message: data.message,
-        attributes: data.attributes ?? {},
-      });
-    });
+    const { accepted, rejected } = validateLogs(logs);
 
     if (accepted.length > 0) {
       await logRepository.insertMany(accepted);
@@ -60,7 +15,7 @@ class LogService {
     return { accepted: accepted.length, rejected };
   }
 
-  async getLogs(query: any) {
+  async getLogs(query: QueryParams) {
     const rawLimit = query.limit;
     let limit = 100;
 
@@ -75,7 +30,10 @@ class LogService {
       limit = parsed;
     }
 
-    if (query.level && !VALID_LEVELS.includes(query.level)) {
+    if (
+      query.level &&
+      !VALID_LEVELS.includes(query.level as (typeof VALID_LEVELS)[number])
+    ) {
       throw new Error(
         `invalid level: '${query.level}'. Must be one of: debug, info, warn, error`,
       );
@@ -97,7 +55,7 @@ class LogService {
 
     let cursor: { timestamp: string; id: string } | null = null;
     if (query.cursor) {
-      cursor = decodeCursor(query.cursor); // سيرمي error إذا كان غير صالح
+      cursor = decodeCursor(query.cursor);
     }
 
     const andConditions: Prisma.LogWhereInput[] = [];
@@ -107,7 +65,7 @@ class LogService {
     }
 
     if (query.level) {
-      andConditions.push({ level: query.level });
+      andConditions.push({ level: query.level as Prisma.EnumLogLevelFilter });
     }
 
     if (query.since || query.until) {
@@ -119,10 +77,8 @@ class LogService {
       });
     }
 
-    for (const [key, value] of Object.entries(
-      query as Record<string, string>,
-    )) {
-      if (key.startsWith("attr.")) {
+    for (const [key, value] of Object.entries(query)) {
+      if (key.startsWith("attr.") && value !== undefined) {
         const attrKey = key.slice(5);
         andConditions.push({
           attributes: {
@@ -171,34 +127,41 @@ class LogService {
     return { logs: results, next_cursor };
   }
 
-  async aggregateLogs(query: any) {
+  async aggregateLogs(query: QueryParams) {
     if (!query.since) throw new Error("since is required");
     if (!query.until) throw new Error("until is required");
     if (!query.bucket) throw new Error("bucket is required");
+
     if (isNaN(Date.parse(query.since)))
       throw new Error("Invalid since: must be a valid ISO 8601 timestamp");
     if (isNaN(Date.parse(query.until)))
       throw new Error("Invalid until: must be a valid ISO 8601 timestamp");
     if (new Date(query.until) <= new Date(query.since))
       throw new Error("until must be later than since");
+
     const validBuckets = ["1m", "5m", "1h", "1d"] as const;
-    if (!validBuckets.includes(query.bucket)) {
+    if (!validBuckets.includes(query.bucket as (typeof validBuckets)[number])) {
       throw new Error("invalid bucket: must be one of 1m, 5m, 1h, 1d");
     }
+
     if (query.group_by && !["service", "level"].includes(query.group_by)) {
       throw new Error("invalid group_by: must be 'service' or 'level'");
     }
-    if (query.level && !VALID_LEVELS.includes(query.level)) {
+
+    if (
+      query.level &&
+      !VALID_LEVELS.includes(query.level as (typeof VALID_LEVELS)[number])
+    ) {
       throw new Error(`invalid level: '${query.level}'`);
     }
+
     const attrFilters: Record<string, string> = {};
-    for (const [key, value] of Object.entries(
-      query as Record<string, string>,
-    )) {
-      if (key.startsWith("attr.")) {
+    for (const [key, value] of Object.entries(query)) {
+      if (key.startsWith("attr.") && value !== undefined) {
         attrFilters[key.slice(5)] = value;
       }
     }
+
     const buckets = await logRepository.aggregate({
       since: new Date(query.since),
       until: new Date(query.until),
@@ -209,6 +172,7 @@ class LogService {
       q: query.q,
       attrFilters,
     });
+
     return { buckets };
   }
 }
