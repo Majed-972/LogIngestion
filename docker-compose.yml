@@ -21,6 +21,7 @@ services:
         -c max_connections=200
         -c effective_cache_size=768MB
         -c work_mem=4MB
+        -c max_parallel_workers_per_gather=0
         -c random_page_cost=1.1
         -c effective_io_concurrency=200
     deploy:
