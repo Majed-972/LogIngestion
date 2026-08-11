@@ -23,7 +23,15 @@ model Log {
   createdAt  DateTime @default(now())
 
   @@index([timestamp(sort: Desc), id(sort: Desc)])
-  @@index([service, timestamp(sort: Desc)])
-  @@index([level, timestamp(sort: Desc)])
-  @@index([attributes], type: Gin)
+}
+
+model LogRollup {
+  bucket  DateTime
+  service String
+  level   LogLevel
+  count   BigInt
+
+  @@id([bucket, service, level])
+  @@index([service, bucket])
+  @@index([level, bucket])
 }

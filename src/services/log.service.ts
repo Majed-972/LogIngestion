@@ -1,6 +1,6 @@
-import { Prisma } from "@prisma/client";
 import logRepository from "../repositories/log.repository.js";
 import { encodeCursor, decodeCursor } from "../utils/cursor.js";
+import { isValidIsoTimestamp } from "../utils/datetime.js";
 import { validateLogs } from "../validators/log.validator.js";
 import { VALID_LEVELS, type QueryParams } from "../types/log.types.js";
 
@@ -39,10 +39,10 @@ class LogService {
       );
     }
 
-    if (query.since && isNaN(Date.parse(query.since))) {
+    if (query.since && !isValidIsoTimestamp(query.since)) {
       throw new Error("Invalid since: must be a valid ISO 8601 timestamp");
     }
-    if (query.until && isNaN(Date.parse(query.until))) {
+    if (query.until && !isValidIsoTimestamp(query.until)) {
       throw new Error("Invalid until: must be a valid ISO 8601 timestamp");
     }
     if (
@@ -58,62 +58,25 @@ class LogService {
       cursor = decodeCursor(query.cursor);
     }
 
-    const andConditions: Prisma.LogWhereInput[] = [];
-
-    if (query.service) {
-      andConditions.push({ service: query.service });
-    }
-
-    if (query.level) {
-      andConditions.push({ level: query.level as Prisma.EnumLogLevelFilter });
-    }
-
-    if (query.since || query.until) {
-      andConditions.push({
-        timestamp: {
-          ...(query.since ? { gte: new Date(query.since) } : {}),
-          ...(query.until ? { lt: new Date(query.until) } : {}),
-        },
-      });
-    }
-
+    const attrFilters: Record<string, string> = {};
     for (const [key, value] of Object.entries(query)) {
       if (key.startsWith("attr.") && value !== undefined) {
-        const attrKey = key.slice(5);
-        andConditions.push({
-          attributes: {
-            path: [attrKey],
-            equals: value,
-          },
-        });
+        attrFilters[key.slice(5)] = value;
       }
     }
 
-    if (query.q) {
-      andConditions.push({
-        message: {
-          contains: query.q,
-          mode: "insensitive",
-        },
-      });
-    }
-
-    if (cursor) {
-      andConditions.push({
-        OR: [
-          { timestamp: { lt: new Date(cursor.timestamp) } },
-          {
-            timestamp: { equals: new Date(cursor.timestamp) },
-            id: { lt: cursor.id },
-          },
-        ],
-      });
-    }
-
-    const where: Prisma.LogWhereInput =
-      andConditions.length > 0 ? { AND: andConditions } : {};
-
-    const logs = await logRepository.findMany(where, limit + 1);
+    const logs = await logRepository.findMany(
+      {
+        service: query.service,
+        level: query.level,
+        since: query.since ? new Date(query.since) : undefined,
+        until: query.until ? new Date(query.until) : undefined,
+        attrFilters,
+        q: query.q,
+        cursor: cursor ?? undefined,
+      },
+      limit + 1,
+    );
 
     const hasNextPage = logs.length > limit;
     const results = hasNextPage ? logs.slice(0, limit) : logs;
@@ -132,9 +95,9 @@ class LogService {
     if (!query.until) throw new Error("until is required");
     if (!query.bucket) throw new Error("bucket is required");
 
-    if (isNaN(Date.parse(query.since)))
+    if (!isValidIsoTimestamp(query.since))
       throw new Error("Invalid since: must be a valid ISO 8601 timestamp");
-    if (isNaN(Date.parse(query.until)))
+    if (!isValidIsoTimestamp(query.until))
       throw new Error("Invalid until: must be a valid ISO 8601 timestamp");
     if (new Date(query.until) <= new Date(query.since))
       throw new Error("until must be later than since");

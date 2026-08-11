@@ -3,6 +3,7 @@ import {
   type LogLevelType,
   type ValidatedLogInput,
 } from "../types/log.types.js";
+import { isValidIsoTimestamp } from "../utils/datetime.js";
 
 export function validateLogs(logs: unknown[]): {
   accepted: ValidatedLogInput[];
@@ -16,18 +17,19 @@ export function validateLogs(logs: unknown[]): {
   for (let index = 0; index < len; index++) {
     const log = logs[index];
 
+    if (typeof log !== "object" || log === null || Array.isArray(log)) {
+      rejected.push({ index, reason: "invalid log entry" });
+      continue;
+    }
+
     const item = log as Record<string, unknown>;
 
     // 1. Validate timestamp
-    if (typeof item["timestamp"] !== "string") {
+    if (!isValidIsoTimestamp(item["timestamp"])) {
       rejected.push({ index, reason: "invalid timestamp" });
       continue;
     }
     const timeParsed = Date.parse(item["timestamp"]);
-    if (isNaN(timeParsed)) {
-      rejected.push({ index, reason: "invalid timestamp" });
-      continue;
-    }
     if (timeParsed > maxFutureTime) {
       rejected.push({
         index,

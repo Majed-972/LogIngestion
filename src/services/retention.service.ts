@@ -57,6 +57,8 @@ export class RetentionService {
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
 
+      await this.refreshRollupsAtRetentionBoundary(cutoffDate);
+
       if (totalDeleted > 0) {
         console.log(
           `[Retention] Cleaned up ${totalDeleted} expired logs older than ${cutoffDate.toISOString()}`,
@@ -65,6 +67,31 @@ export class RetentionService {
     } catch (error) {
       console.error("[Retention] Error during log cleanup:", error);
     }
+  }
+
+  private async refreshRollupsAtRetentionBoundary(cutoffDate: Date) {
+    const cutoffMinute = new Date(cutoffDate);
+    cutoffMinute.setUTCSeconds(0, 0);
+
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`
+        DELETE FROM "LogRollup"
+        WHERE "bucket" <= ${cutoffMinute};
+      `;
+
+      await tx.$executeRaw`
+        INSERT INTO "LogRollup" ("bucket", "service", "level", "count")
+        SELECT
+          date_trunc('minute', "timestamp") AS "bucket",
+          "service",
+          "level",
+          COUNT(*)::bigint AS "count"
+        FROM "Log"
+        WHERE "timestamp" >= ${cutoffMinute}
+          AND "timestamp" < ${new Date(cutoffMinute.getTime() + 60_000)}
+        GROUP BY 1, 2, 3;
+      `;
+    });
   }
 }
 

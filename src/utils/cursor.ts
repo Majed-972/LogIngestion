@@ -3,6 +3,9 @@ type CursorData = {
   id: string;
 };
 
+const UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 export function encodeCursor(timestamp: Date, id: string): string {
   const data: CursorData = {
     timestamp: timestamp.toISOString(),
@@ -29,7 +32,7 @@ export function decodeCursor(cursor: string): CursorData {
 
     const cursorData = data as CursorData;
 
-    if (isNaN(Date.parse(cursorData.timestamp))) {
+    if (isNaN(Date.parse(cursorData.timestamp)) || !UUID.test(cursorData.id)) {
       throw new Error("Invalid cursor timestamp");
     }
 

@@ -3,16 +3,14 @@ import http from "http";
 const HOST = "localhost";
 const PORT = 8080;
 const PATH_INGEST = "/logs";
-const PATH_AGGREGATE =
-  "/logs/aggregate?since=2026-08-01T00:00:00Z&until=2026-08-09T23:59:59Z&bucket=1m&group_by=service";
 
-const BATCH_SIZE = 1000;
-const CONCURRENT_REQUESTS = 15;
-const DURATION_SECONDS = 10;
+const BATCH_SIZE = Number(process.env["BATCH_SIZE"] ?? "32");
+const CONCURRENT_REQUESTS = Number(process.env["CONCURRENT_REQUESTS"] ?? "64");
+const DURATION_SECONDS = Number(process.env["DURATION_SECONDS"] ?? "15");
 
 const keepAliveAgent = new http.Agent({
   keepAlive: true,
-  maxSockets: 50,
+  maxSockets: CONCURRENT_REQUESTS,
 });
 
 interface LogEntry {
@@ -46,6 +44,12 @@ function generateBatch(size: number): string {
   }
 
   return JSON.stringify({ logs });
+}
+
+function aggregatePath(): string {
+  const until = new Date().toISOString();
+  const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  return `/logs/aggregate?since=${encodeURIComponent(since)}&until=${encodeURIComponent(until)}&bucket=1m&group_by=service`;
 }
 
 function sendIngestRequest(payload: string): Promise<boolean> {
@@ -83,7 +87,7 @@ function sendAggregateRequest(): Promise<number> {
       {
         hostname: HOST,
         port: PORT,
-        path: PATH_AGGREGATE,
+        path: aggregatePath(),
         method: "GET",
         agent: keepAliveAgent,
       },

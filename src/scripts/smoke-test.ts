@@ -116,6 +116,13 @@ async function runSmokeTest() {
           service: "smoke-auth",
           message: "bad timestamp",
         },
+        null,
+        {
+          timestamp: "August 10, 2026 10:00:00",
+          level: "info",
+          service: "smoke-auth",
+          message: "non-ISO timestamp",
+        },
       ],
     });
     const mixed = await request(
@@ -136,8 +143,8 @@ async function runSmokeTest() {
     };
     if (mixedJson.accepted !== 1)
       throw new Error(`Expected accepted=1, got ${mixedJson.accepted}`);
-    if (mixedJson.rejected.length !== 3)
-      throw new Error(`Expected 3 rejected, got ${mixedJson.rejected.length}`);
+    if (mixedJson.rejected.length !== 5)
+      throw new Error(`Expected 5 rejected, got ${mixedJson.rejected.length}`);
     console.log(
       `   ✅ accepted=${mixedJson.accepted}, rejected=${mixedJson.rejected.length}`,
     );
@@ -194,6 +201,33 @@ async function runSmokeTest() {
 
     // ─── 6. Pagination ────────────────────────────────────────────────────────
     console.log("6️⃣  GET /logs — cursor-based pagination");
+    const numericAttribute = await request({
+      hostname: HOST,
+      port: PORT,
+      path: "/logs?service=smoke-payment&attr.retries=3&limit=10",
+      method: "GET",
+    });
+    const booleanAttribute = await request({
+      hostname: HOST,
+      port: PORT,
+      path: "/logs?service=smoke-checkout&attr.is_smoke=true&limit=10",
+      method: "GET",
+    });
+    const numericLogs = JSON.parse(numericAttribute.body) as {
+      logs: unknown[];
+    };
+    const booleanLogs = JSON.parse(booleanAttribute.body) as {
+      logs: unknown[];
+    };
+    if (numericAttribute.statusCode !== 200 || numericLogs.logs.length === 0)
+      throw new Error(
+        `Numeric attribute query failed: ${numericAttribute.body}`,
+      );
+    if (booleanAttribute.statusCode !== 200 || booleanLogs.logs.length === 0)
+      throw new Error(
+        `Boolean attribute query failed: ${booleanAttribute.body}`,
+      );
+
     const page1 = await request({
       hostname: HOST,
       port: PORT,
@@ -214,6 +248,19 @@ async function runSmokeTest() {
     });
     if (page2.statusCode !== 200)
       throw new Error(`Pagination page 2 returned status ${page2.statusCode}`);
+    const malformedCursor = Buffer.from(
+      JSON.stringify({ timestamp: new Date().toISOString(), id: "not-a-uuid" }),
+    ).toString("base64");
+    const invalidCursor = await request({
+      hostname: HOST,
+      port: PORT,
+      path: `/logs?cursor=${encodeURIComponent(malformedCursor)}`,
+      method: "GET",
+    });
+    if (invalidCursor.statusCode !== 400)
+      throw new Error(
+        `Expected 400 for malformed cursor, got ${invalidCursor.statusCode}`,
+      );
     console.log("   ✅ Pagination works correctly\n");
 
     // ─── 7. Invalid query params return 400 ──────────────────────────────────
@@ -248,6 +295,16 @@ async function runSmokeTest() {
       throw new Error(
         `Expected 400 for until < since, got ${invalidSinceUntil.statusCode}`,
       );
+    const invalidIsoTimestamp = await request({
+      hostname: HOST,
+      port: PORT,
+      path: "/logs?since=August%2010,%202026",
+      method: "GET",
+    });
+    if (invalidIsoTimestamp.statusCode !== 400)
+      throw new Error(
+        `Expected 400 for non-ISO timestamp, got ${invalidIsoTimestamp.statusCode}`,
+      );
     console.log("   ✅ All invalid params return 400\n");
 
     // ─── 8. Aggregate ────────────────────────────────────────────────────────
@@ -276,6 +333,22 @@ async function runSmokeTest() {
       typeof bucket.count !== "number"
     )
       throw new Error(`Bucket shape invalid: ${JSON.stringify(bucket)}`);
+    const aggregateNumericAttribute = await request({
+      hostname: HOST,
+      port: PORT,
+      path: `/logs/aggregate?since=${since}&until=${until}&bucket=1m&attr.retries=3`,
+      method: "GET",
+    });
+    const aggregateNumericJson = JSON.parse(aggregateNumericAttribute.body) as {
+      buckets: unknown[];
+    };
+    if (
+      aggregateNumericAttribute.statusCode !== 200 ||
+      aggregateNumericJson.buckets.length === 0
+    )
+      throw new Error(
+        `Aggregate numeric attribute query failed: ${aggregateNumericAttribute.body}`,
+      );
     console.log(`   ✅ Returned ${aggJson.buckets.length} bucket(s)`);
     console.log(
       `   ✅ Bucket shape: start=${bucket.start}, group=${String(bucket.group)}, count=${bucket.count}\n`,
