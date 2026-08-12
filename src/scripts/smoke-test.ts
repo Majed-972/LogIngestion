@@ -29,7 +29,6 @@ async function runSmokeTest() {
   console.log("🩺 Running Ingestion Service Smoke Test...\n");
 
   try {
-    // ─── 1. Health Check ─────────────────────────────────────────────────────
     console.log("1️⃣  GET /health");
     const health = await request({
       hostname: HOST,
@@ -41,7 +40,6 @@ async function runSmokeTest() {
       throw new Error(`/health returned status ${health.statusCode}`);
     console.log("   ✅ Status 200\n");
 
-    // ─── 2. Ingest valid batch ────────────────────────────────────────────────
     console.log("2️⃣  POST /logs — valid batch");
     const logPayload = JSON.stringify({
       logs: [
@@ -87,7 +85,6 @@ async function runSmokeTest() {
       `   ✅ accepted=${ingestJson.accepted}, rejected=${ingestJson.rejected.length}\n`,
     );
 
-    // ─── 3. Ingest mixed batch (valid + invalid) ──────────────────────────────
     console.log("3️⃣  POST /logs — mixed batch (valid + invalid entries)");
     const mixedPayload = JSON.stringify({
       logs: [
@@ -152,7 +149,6 @@ async function runSmokeTest() {
       `   ✅ Rejected entries: ${mixedJson.rejected.map((r) => `[${r.index}] ${r.reason}`).join(" | ")}\n`,
     );
 
-    // ─── 3a. Accepted batches are queryable immediately ───────────────────
     console.log("3a. POST /logs — accepted batches are visible immediately");
     const consistencyService = `smoke-consistency-${Date.now()}`;
     const consistencySince = new Date().toISOString();
@@ -217,7 +213,6 @@ async function runSmokeTest() {
       );
     console.log("   ✅ All 512 accepted logs were immediately visible\n");
 
-    // ─── 4. All-invalid batch returns 400 ────────────────────────────────────
     console.log("4️⃣  POST /logs — all-invalid batch must return 400");
     const badPayload = JSON.stringify({
       logs: [
@@ -240,7 +235,6 @@ async function runSmokeTest() {
       );
     console.log("   ✅ Status 400 returned correctly\n");
 
-    // ─── 5. Query logs ────────────────────────────────────────────────────────
     console.log("5️⃣  GET /logs — basic query");
     const getLogs = await request({
       hostname: HOST,
@@ -264,7 +258,6 @@ async function runSmokeTest() {
       `   ✅ Returned ${logsJson.logs.length} log(s), next_cursor=${String(logsJson.next_cursor)}\n`,
     );
 
-    // ─── 6. Pagination ────────────────────────────────────────────────────────
     console.log("6️⃣  GET /logs — cursor-based pagination");
     const numericAttribute = await request({
       hostname: HOST,
