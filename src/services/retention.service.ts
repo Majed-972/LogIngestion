@@ -91,6 +91,27 @@ export class RetentionService {
           AND "timestamp" < ${new Date(cutoffMinute.getTime() + 60_000)}
         GROUP BY 1, 2, 3;
       `;
+
+      const cutoffSecond = new Date(cutoffDate);
+      cutoffSecond.setUTCMilliseconds(0);
+
+      await tx.$executeRaw`
+        DELETE FROM "LogSecondRollup"
+        WHERE "bucket" <= ${cutoffSecond};
+      `;
+
+      await tx.$executeRaw`
+        INSERT INTO "LogSecondRollup" ("bucket", "service", "level", "count")
+        SELECT
+          date_trunc('second', "timestamp") AS "bucket",
+          "service",
+          "level",
+          COUNT(*)::bigint AS "count"
+        FROM "Log"
+        WHERE "timestamp" >= ${cutoffSecond}
+          AND "timestamp" < ${new Date(cutoffSecond.getTime() + 1_000)}
+        GROUP BY 1, 2, 3;
+      `;
     });
   }
 }

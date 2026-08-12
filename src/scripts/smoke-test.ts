@@ -152,6 +152,71 @@ async function runSmokeTest() {
       `   ✅ Rejected entries: ${mixedJson.rejected.map((r) => `[${r.index}] ${r.reason}`).join(" | ")}\n`,
     );
 
+    // ─── 3a. Accepted batches are queryable immediately ───────────────────
+    console.log("3a. POST /logs — accepted batches are visible immediately");
+    const consistencyService = `smoke-consistency-${Date.now()}`;
+    const consistencySince = new Date().toISOString();
+    const consistencyPayload = JSON.stringify({
+      logs: Array.from({ length: 32 }, (_, index) => ({
+        timestamp: new Date().toISOString(),
+        level: "info",
+        service: consistencyService,
+        message: `consistency log ${index}`,
+        attributes: {},
+      })),
+    });
+    const consistencyWrites = await Promise.all(
+      Array.from({ length: 16 }, () =>
+        request(
+          {
+            hostname: HOST,
+            port: PORT,
+            path: "/logs",
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+          },
+          consistencyPayload,
+        ),
+      ),
+    );
+    if (consistencyWrites.some((response) => response.statusCode !== 200))
+      throw new Error("A consistency batch was not accepted");
+    const consistencyUntil = new Date(Date.now() + 1_000).toISOString();
+    const consistencyRead = await request({
+      hostname: HOST,
+      port: PORT,
+      path: `/logs?service=${encodeURIComponent(consistencyService)}&since=${encodeURIComponent(consistencySince)}&until=${encodeURIComponent(consistencyUntil)}&limit=1000`,
+      method: "GET",
+    });
+    const consistencyJson = JSON.parse(consistencyRead.body) as {
+      logs: unknown[];
+    };
+    if (
+      consistencyRead.statusCode !== 200 ||
+      consistencyJson.logs.length !== 512
+    )
+      throw new Error(
+        `Expected 512 visible logs after 200 responses, got ${consistencyJson.logs.length}`,
+      );
+    const consistencyAggregate = await request({
+      hostname: HOST,
+      port: PORT,
+      path: `/logs/aggregate?since=${encodeURIComponent(consistencySince)}&until=${encodeURIComponent(consistencyUntil)}&bucket=1m&service=${encodeURIComponent(consistencyService)}`,
+      method: "GET",
+    });
+    const consistencyAggregateJson = JSON.parse(consistencyAggregate.body) as {
+      buckets: { count: number }[];
+    };
+    const aggregateCount = consistencyAggregateJson.buckets.reduce(
+      (total, bucket) => total + bucket.count,
+      0,
+    );
+    if (consistencyAggregate.statusCode !== 200 || aggregateCount !== 512)
+      throw new Error(
+        `Expected aggregate count=512 after 200 responses, got ${aggregateCount}`,
+      );
+    console.log("   ✅ All 512 accepted logs were immediately visible\n");
+
     // ─── 4. All-invalid batch returns 400 ────────────────────────────────────
     console.log("4️⃣  POST /logs — all-invalid batch must return 400");
     const badPayload = JSON.stringify({

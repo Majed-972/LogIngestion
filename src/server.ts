@@ -1,9 +1,11 @@
 import app from "./app.js";
 import retentionService from "./services/retention.service.js";
+import rollupService from "./services/rollup.service.js";
 
 const start = async () => {
   const Port = 8080;
   try {
+    await rollupService.rebuildIfNeeded();
     await app.listen({
       port: Port,
       host: "0.0.0.0",

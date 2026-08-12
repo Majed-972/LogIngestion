@@ -5,6 +5,7 @@ import {
   buildRollupAggregateQuery,
   mapAggregateRows,
 } from "./aggregate.builder.js";
+import { attributeFilter } from "./attribute-filter.js";
 import type {
   AggregateOptions,
   ValidatedLogInput,
@@ -99,52 +100,66 @@ export class LogRepository {
   }
 
   private async insertBatch(logs: ValidatedLogInput[]) {
-    const len = logs.length;
-    const timestamps = new Array(len);
-    const levels = new Array(len);
-    const services = new Array(len);
-    const messages = new Array(len);
-    const attributes = new Array(len);
-
-    for (let i = 0; i < len; i++) {
-      const l = logs[i]!;
-      timestamps[i] = l.timestamp;
-      levels[i] = l.level;
-      services[i] = l.service;
-      messages[i] = l.message;
-      attributes[i] = JSON.stringify(l.attributes);
-    }
-
     await pool.query(
-      `WITH inserted AS (
+      `WITH payload AS (
+         SELECT
+           timestamp::timestamptz AS "timestamp",
+           level::"LogLevel" AS "level",
+           service,
+           message,
+           COALESCE(attributes, '{}'::jsonb) AS attributes
+         FROM jsonb_to_recordset($1::jsonb) AS input(
+           timestamp text,
+           level text,
+           service text,
+           message text,
+           attributes jsonb
+         )
+       ), inserted AS (
          INSERT INTO "Log" ("id", "timestamp", "level", "service", "message", "attributes", "createdAt")
          SELECT
            (
              '00000000-0000-7000-8000-' ||
              lpad(to_hex(nextval('"Log_id_seq"')), 12, '0')
            )::uuid,
-           unnest($1::timestamptz[]),
-           unnest($2::"LogLevel"[]),
-           unnest($3::text[]),
-           unnest($4::text[]),
-           unnest($5::jsonb[]),
+           "timestamp",
+           "level",
+           service,
+           message,
+           attributes,
            NOW()
+         FROM payload
          RETURNING "timestamp", "service", "level"
-       ), minute_rollups AS (
+       ), rollups AS (
          SELECT
            date_trunc('minute', "timestamp") AS "bucket",
+           date_trunc('second', "timestamp") AS "second_bucket",
            "service",
            "level",
            COUNT(*)::bigint AS "count"
          FROM inserted
+         GROUP BY 1, 2, 3, 4
+       ), minute_rollups AS (
+         SELECT "bucket", "service", "level", SUM("count")::bigint AS "count"
+         FROM rollups
          GROUP BY 1, 2, 3
-       )
+       ), second_rollups AS (
+         SELECT "second_bucket" AS "bucket", "service", "level", "count"
+         FROM rollups
+       ), inserted_minutes AS (
        INSERT INTO "LogRollup" ("bucket", "service", "level", "count")
        SELECT "bucket", "service", "level", "count"
        FROM minute_rollups
        ON CONFLICT ("bucket", "service", "level")
-       DO UPDATE SET "count" = "LogRollup"."count" + EXCLUDED."count"`,
-      [timestamps, levels, services, messages, attributes],
+       DO UPDATE SET "count" = "LogRollup"."count" + EXCLUDED."count"
+       RETURNING 1
+       )
+       INSERT INTO "LogSecondRollup" ("bucket", "service", "level", "count")
+       SELECT "bucket", "service", "level", "count"
+       FROM second_rollups
+       ON CONFLICT ("bucket", "service", "level")
+       DO UPDATE SET "count" = "LogSecondRollup"."count" + EXCLUDED."count"`,
+      [JSON.stringify(logs)],
     );
     return { count: logs.length };
   }
@@ -169,7 +184,7 @@ export class LogRepository {
     }
 
     for (const [key, value] of Object.entries(options.attrFilters)) {
-      conditions.push(Prisma.sql`attributes->>${key} = ${value}`);
+      conditions.push(attributeFilter(key, value));
     }
 
     if (options.q) {
@@ -191,13 +206,30 @@ export class LogRepository {
         ? Prisma.sql`WHERE ${Prisma.join(conditions, " AND ")}`
         : Prisma.empty;
 
-    return prisma.$queryRaw<Log[]>(Prisma.sql`
+    const query = Prisma.sql`
       SELECT id, timestamp, level, service, message, attributes, "createdAt"
       FROM "Log"
       ${whereClause}
       ORDER BY timestamp DESC, id DESC
       LIMIT ${take}
-    `);
+    `;
+
+    // A substring search can match a large portion of a log stream.  A GIN
+    // scan would collect every match and then sort it, even though this API
+    // needs only the newest `take` rows.  The timestamp primary key can scan
+    // backwards and stop as soon as the page is full.  Keep GIN available for
+    // attr.* filters, where it is the selective access path.
+    if (options.q && Object.keys(options.attrFilters).length === 0) {
+      return prisma.$transaction(async (transaction) => {
+        await transaction.$executeRawUnsafe(
+          "SET LOCAL enable_bitmapscan = off",
+        );
+        await transaction.$executeRawUnsafe("SET LOCAL enable_seqscan = off");
+        return transaction.$queryRaw<Log[]>(query);
+      });
+    }
+
+    return prisma.$queryRaw<Log[]>(query);
   }
 
   async aggregate(options: AggregateOptions) {

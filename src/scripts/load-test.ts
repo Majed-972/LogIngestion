@@ -10,7 +10,9 @@ const DURATION_SECONDS = Number(process.env["DURATION_SECONDS"] ?? "15");
 
 const keepAliveAgent = new http.Agent({
   keepAlive: true,
-  maxSockets: CONCURRENT_REQUESTS,
+  // Keep separate capacity for the aggregate request; otherwise its measured
+  // latency includes waiting behind a full wave of ingest sockets.
+  maxSockets: CONCURRENT_REQUESTS + 4,
 });
 
 interface LogEntry {

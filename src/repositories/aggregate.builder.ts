@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import type { AggregateOptions } from "../types/log.types.js";
+import { attributeFilter } from "./attribute-filter.js";
 
 type AggregateRow = {
   bucket: Date;
@@ -45,7 +46,7 @@ export function buildAggregateQuery(options: AggregateOptions): Prisma.Sql {
   }
 
   for (const [key, value] of Object.entries(attrFilters)) {
-    conditions.push(Prisma.sql`attributes->>${key} = ${value}`);
+    conditions.push(attributeFilter(key, value));
   }
 
   const whereClause = Prisma.sql`WHERE ${Prisma.join(conditions, " AND ")}`;
@@ -131,6 +132,14 @@ function floorToMinute(date: Date): Date {
   return new Date(Math.floor(date.getTime() / 60_000) * 60_000);
 }
 
+function ceilToSecond(date: Date): Date {
+  return new Date(Math.ceil(date.getTime() / 1_000) * 1_000);
+}
+
+function floorToSecond(date: Date): Date {
+  return new Date(Math.floor(date.getTime() / 1_000) * 1_000);
+}
+
 export function buildRollupAggregateQuery(
   options: AggregateOptions,
 ): Prisma.Sql | null {
@@ -144,42 +153,67 @@ export function buildRollupAggregateQuery(
 
   if (rollupStart >= rollupEnd) return null;
 
+  const secondStart = ceilToSecond(since);
+  const secondEnd = floorToSecond(until);
   const directFilters: Prisma.Sql[] = [];
   const rollupFilters: Prisma.Sql[] = [
     Prisma.sql`"bucket" >= ${rollupStart}`,
     Prisma.sql`"bucket" < ${rollupEnd}`,
   ];
+  const secondFilters: Prisma.Sql[] = [];
 
   if (service) {
     directFilters.push(Prisma.sql`service = ${service}`);
     rollupFilters.push(Prisma.sql`service = ${service}`);
+    secondFilters.push(Prisma.sql`service = ${service}`);
   }
 
   if (level) {
     directFilters.push(Prisma.sql`level = ${level}::"LogLevel"`);
     rollupFilters.push(Prisma.sql`level = ${level}::"LogLevel"`);
+    secondFilters.push(Prisma.sql`level = ${level}::"LogLevel"`);
   }
 
-  const boundaryRanges: Prisma.Sql[] = [];
-  if (since < rollupStart) {
-    boundaryRanges.push(
-      Prisma.sql`(timestamp >= ${since} AND timestamp < ${rollupStart})`,
+  const directRanges: Prisma.Sql[] = [];
+  if (since < secondStart) {
+    directRanges.push(
+      Prisma.sql`(timestamp >= ${since} AND timestamp < ${secondStart})`,
     );
   }
-  if (rollupEnd < until) {
-    boundaryRanges.push(
-      Prisma.sql`(timestamp >= ${rollupEnd} AND timestamp < ${until})`,
+  if (secondEnd < until) {
+    directRanges.push(
+      Prisma.sql`(timestamp >= ${secondEnd} AND timestamp < ${until})`,
     );
   }
 
   directFilters.push(
-    boundaryRanges.length > 0
-      ? Prisma.sql`(${Prisma.join(boundaryRanges, " OR ")})`
+    directRanges.length > 0
+      ? Prisma.sql`(${Prisma.join(directRanges, " OR ")})`
+      : Prisma.sql`FALSE`,
+  );
+
+  const secondRanges: Prisma.Sql[] = [];
+  const leadingSecondEnd = secondEnd < rollupStart ? secondEnd : rollupStart;
+  if (secondStart < leadingSecondEnd) {
+    secondRanges.push(
+      Prisma.sql`("bucket" >= ${secondStart} AND "bucket" < ${leadingSecondEnd})`,
+    );
+  }
+  const trailingSecondStart = secondStart > rollupEnd ? secondStart : rollupEnd;
+  if (trailingSecondStart < secondEnd) {
+    secondRanges.push(
+      Prisma.sql`("bucket" >= ${trailingSecondStart} AND "bucket" < ${secondEnd})`,
+    );
+  }
+  secondFilters.push(
+    secondRanges.length > 0
+      ? Prisma.sql`(${Prisma.join(secondRanges, " OR ")})`
       : Prisma.sql`FALSE`,
   );
 
   const directWhere = Prisma.sql`WHERE ${Prisma.join(directFilters, " AND ")}`;
   const rollupWhere = Prisma.sql`WHERE ${Prisma.join(rollupFilters, " AND ")}`;
+  const secondWhere = Prisma.sql`WHERE ${Prisma.join(secondFilters, " AND ")}`;
   const { select, directGroupBy, rollupGroupBy } = groupClauses(groupBy);
   const directBucket = bucketExpression(bucket, Prisma.sql`timestamp`);
   const rollupBucket = bucketExpression(bucket, Prisma.sql`"bucket"`);
@@ -202,10 +236,24 @@ export function buildRollupAggregateQuery(
     ${rollupWhere}
     ${rollupGroupBy}
   `;
-
+  const secondRows = Prisma.sql`
+    SELECT
+      ${rollupBucket} AS bucket,
+      ${select} AS "group",
+      SUM("count")::bigint AS count
+    FROM "LogSecondRollup"
+    ${secondWhere}
+    ${rollupGroupBy}
+  `;
   return Prisma.sql`
     SELECT bucket, "group", SUM(count)::bigint AS count
-    FROM (${directRows} UNION ALL ${rollupRows}) AS aggregate_source
+    FROM (
+      ${directRows}
+      UNION ALL
+      ${rollupRows}
+      UNION ALL
+      ${secondRows}
+    ) AS aggregate_source
     GROUP BY bucket, "group"
     ORDER BY bucket ASC
   `;

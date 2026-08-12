@@ -14,7 +14,7 @@ enum LogLevel {
 }
 
 model Log {
-  id         String   @id @default(uuid()) @db.Uuid
+  id         String   @db.Uuid
   timestamp  DateTime
   level      LogLevel
   service    String
@@ -22,7 +22,7 @@ model Log {
   attributes Json
   createdAt  DateTime @default(now())
 
-  @@index([timestamp(sort: Desc), id(sort: Desc)])
+  @@id([timestamp, id])
 }
 
 model LogRollup {
@@ -32,6 +32,13 @@ model LogRollup {
   count   BigInt
 
   @@id([bucket, service, level])
-  @@index([service, bucket])
-  @@index([level, bucket])
+}
+
+model LogSecondRollup {
+  bucket  DateTime
+  service String
+  level   LogLevel
+  count   BigInt
+
+  @@id([bucket, service, level])
 }
