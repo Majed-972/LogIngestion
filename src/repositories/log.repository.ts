@@ -1,10 +1,6 @@
 import { Prisma, type Log } from "@prisma/client";
 import prisma, { pool } from "../database/prisma.js";
-import {
-  buildAggregateQuery,
-  buildRollupAggregateQuery,
-  mapAggregateRows,
-} from "./aggregate.builder.js";
+import { buildAggregateQuery, mapAggregateRows } from "./aggregate.builder.js";
 import { attributeFilter } from "./attribute-filter.js";
 import type {
   AggregateOptions,
@@ -43,12 +39,29 @@ export class LogRepository {
   }
 
   private scheduleFlush() {
-    if (this.isFlushing || this.flushTimer) return;
+    if (this.isFlushing) return;
+
+    let totalPendingRows = 0;
+    for (let i = 0; i < this.pendingInserts.length; i++) {
+      totalPendingRows += this.pendingInserts[i]!.logs.length;
+      if (totalPendingRows >= 512) break;
+    }
+
+    if (totalPendingRows >= 512) {
+      if (this.flushTimer) {
+        clearTimeout(this.flushTimer);
+        this.flushTimer = null;
+      }
+      void this.flushPendingInserts();
+      return;
+    }
+
+    if (this.flushTimer) return;
 
     this.flushTimer = setTimeout(() => {
       this.flushTimer = null;
       void this.flushPendingInserts();
-    }, this.flushDelayMs);
+    }, 0);
   }
 
   private takePendingBatch(): PendingInsert[] {
@@ -101,64 +114,25 @@ export class LogRepository {
 
   private async insertBatch(logs: ValidatedLogInput[]) {
     await pool.query(
-      `WITH payload AS (
-         SELECT
-           timestamp::timestamptz AS "timestamp",
-           level::"LogLevel" AS "level",
-           service,
-           message,
-           COALESCE(attributes, '{}'::jsonb) AS attributes
-         FROM jsonb_to_recordset($1::jsonb) AS input(
-           timestamp text,
-           level text,
-           service text,
-           message text,
-           attributes jsonb
-         )
-       ), inserted AS (
-         INSERT INTO "Log" ("id", "timestamp", "level", "service", "message", "attributes", "createdAt")
-         SELECT
-           (
-             '00000000-0000-7000-8000-' ||
-             lpad(to_hex(nextval('"Log_id_seq"')), 12, '0')
-           )::uuid,
-           "timestamp",
-           "level",
-           service,
-           message,
-           attributes,
-           NOW()
-         FROM payload
-         RETURNING "timestamp", "service", "level"
-       ), rollups AS (
-         SELECT
-           date_trunc('minute', "timestamp") AS "bucket",
-           date_trunc('second', "timestamp") AS "second_bucket",
-           "service",
-           "level",
-           COUNT(*)::bigint AS "count"
-         FROM inserted
-         GROUP BY 1, 2, 3, 4
-       ), minute_rollups AS (
-         SELECT "bucket", "service", "level", SUM("count")::bigint AS "count"
-         FROM rollups
-         GROUP BY 1, 2, 3
-       ), second_rollups AS (
-         SELECT "second_bucket" AS "bucket", "service", "level", "count"
-         FROM rollups
-       ), inserted_minutes AS (
-       INSERT INTO "LogRollup" ("bucket", "service", "level", "count")
-       SELECT "bucket", "service", "level", "count"
-       FROM minute_rollups
-       ON CONFLICT ("bucket", "service", "level")
-       DO UPDATE SET "count" = "LogRollup"."count" + EXCLUDED."count"
-       RETURNING 1
-       )
-       INSERT INTO "LogSecondRollup" ("bucket", "service", "level", "count")
-       SELECT "bucket", "service", "level", "count"
-       FROM second_rollups
-       ON CONFLICT ("bucket", "service", "level")
-       DO UPDATE SET "count" = "LogSecondRollup"."count" + EXCLUDED."count"`,
+      `INSERT INTO "Log" ("id", "timestamp", "level", "service", "message", "attributes", "createdAt")
+       SELECT
+         (
+           '00000000-0000-7000-8000-' ||
+           lpad(to_hex(nextval('"Log_id_seq"')), 12, '0')
+         )::uuid,
+         timestamp::timestamptz,
+         level::"LogLevel",
+         service,
+         message,
+         COALESCE(attributes, '{}'::jsonb),
+         NOW()
+       FROM jsonb_to_recordset($1::jsonb) AS input(
+         timestamp text,
+         level text,
+         service text,
+         message text,
+         attributes jsonb
+       )`,
       [JSON.stringify(logs)],
     );
     return { count: logs.length };
@@ -214,27 +188,11 @@ export class LogRepository {
       LIMIT ${take}
     `;
 
-    // A substring search can match a large portion of a log stream.  A GIN
-    // scan would collect every match and then sort it, even though this API
-    // needs only the newest `take` rows.  The timestamp primary key can scan
-    // backwards and stop as soon as the page is full.  Keep GIN available for
-    // attr.* filters, where it is the selective access path.
-    if (options.q && Object.keys(options.attrFilters).length === 0) {
-      return prisma.$transaction(async (transaction) => {
-        await transaction.$executeRawUnsafe(
-          "SET LOCAL enable_bitmapscan = off",
-        );
-        await transaction.$executeRawUnsafe("SET LOCAL enable_seqscan = off");
-        return transaction.$queryRaw<Log[]>(query);
-      });
-    }
-
     return prisma.$queryRaw<Log[]>(query);
   }
 
   async aggregate(options: AggregateOptions) {
-    const sql =
-      buildRollupAggregateQuery(options) ?? buildAggregateQuery(options);
+    const sql = buildAggregateQuery(options);
     const rows =
       await prisma.$queryRaw<
         { bucket: Date; group: string | null; count: bigint }[]
