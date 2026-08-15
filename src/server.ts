@@ -6,12 +6,14 @@ const start = async () => {
   const Port = 8080;
   try {
     await rollupService.rebuildIfNeeded();
+
     await app.listen({
       port: Port,
       host: "0.0.0.0",
     });
     console.log(`Server is running on port ${Port}`);
 
+    rollupService.start();
     retentionService.start();
   } catch (err) {
     app.log.error(err);
@@ -20,11 +22,13 @@ const start = async () => {
 };
 
 process.on("SIGINT", () => {
+  rollupService.stop();
   retentionService.stop();
   process.exit(0);
 });
 
 process.on("SIGTERM", () => {
+  rollupService.stop();
   retentionService.stop();
   process.exit(0);
 });

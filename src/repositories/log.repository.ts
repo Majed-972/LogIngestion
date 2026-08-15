@@ -1,6 +1,10 @@
 import { Prisma, type Log } from "@prisma/client";
 import prisma, { pool } from "../database/prisma.js";
-import { buildAggregateQuery, mapAggregateRows } from "./aggregate.builder.js";
+import {
+  buildAggregateQuery,
+  buildRollupAggregateQuery,
+  mapAggregateRows,
+} from "./aggregate.builder.js";
 import { attributeFilter } from "./attribute-filter.js";
 import type {
   AggregateOptions,
@@ -39,29 +43,12 @@ export class LogRepository {
   }
 
   private scheduleFlush() {
-    if (this.isFlushing) return;
-
-    let totalPendingRows = 0;
-    for (let i = 0; i < this.pendingInserts.length; i++) {
-      totalPendingRows += this.pendingInserts[i]!.logs.length;
-      if (totalPendingRows >= 512) break;
-    }
-
-    if (totalPendingRows >= 512) {
-      if (this.flushTimer) {
-        clearTimeout(this.flushTimer);
-        this.flushTimer = null;
-      }
-      void this.flushPendingInserts();
-      return;
-    }
-
-    if (this.flushTimer) return;
+    if (this.isFlushing || this.flushTimer) return;
 
     this.flushTimer = setTimeout(() => {
       this.flushTimer = null;
       void this.flushPendingInserts();
-    }, 0);
+    }, this.flushDelayMs);
   }
 
   private takePendingBatch(): PendingInsert[] {
@@ -192,7 +179,8 @@ export class LogRepository {
   }
 
   async aggregate(options: AggregateOptions) {
-    const sql = buildAggregateQuery(options);
+    const sql =
+      buildRollupAggregateQuery(options) ?? buildAggregateQuery(options);
     const rows =
       await prisma.$queryRaw<
         { bucket: Date; group: string | null; count: bigint }[]

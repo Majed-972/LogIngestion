@@ -12,17 +12,15 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    # 32 MB prevents lossy bitmap scans for indexed q and attr.* queries
-    # while remaining safe under the 1 GB database memory limit.
     command: >
       postgres
         -c shared_buffers=256MB
         -c synchronous_commit=off
         -c wal_buffers=16MB
         -c checkpoint_completion_target=0.9
-        -c max_connections=64
+        -c max_connections=200
         -c effective_cache_size=768MB
-        -c work_mem=4MB
+        -c work_mem=32MB
         -c max_parallel_workers_per_gather=0
         -c random_page_cost=1.1
         -c effective_io_concurrency=200
