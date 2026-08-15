@@ -1,10 +1,6 @@
 import { Prisma, type Log } from "@prisma/client";
 import prisma, { pool } from "../database/prisma.js";
-import {
-  buildAggregateQuery,
-  buildRollupAggregateQuery,
-  mapAggregateRows,
-} from "./aggregate.builder.js";
+import { buildAggregateQuery, mapAggregateRows } from "./aggregate.builder.js";
 import { attributeFilter } from "./attribute-filter.js";
 import type {
   AggregateOptions,
@@ -179,8 +175,7 @@ export class LogRepository {
   }
 
   async aggregate(options: AggregateOptions) {
-    const sql =
-      buildRollupAggregateQuery(options) ?? buildAggregateQuery(options);
+    const sql = buildAggregateQuery(options);
     const rows =
       await prisma.$queryRaw<
         { bucket: Date; group: string | null; count: bigint }[]
