@@ -196,8 +196,7 @@ export class LogRepository {
     if (options.cursor) {
       const cursorTimestamp = new Date(options.cursor.timestamp);
       conditions.push(Prisma.sql`
-        (timestamp < ${cursorTimestamp}
-          OR (timestamp = ${cursorTimestamp} AND id < ${options.cursor.id}::uuid))
+        ("timestamp", "id") < (${cursorTimestamp}::timestamp, ${options.cursor.id}::uuid)
       `);
     }
 
@@ -207,7 +206,7 @@ export class LogRepository {
         : Prisma.empty;
 
     const query = Prisma.sql`
-      SELECT id, timestamp, level, service, message, attributes, "createdAt"
+      SELECT id, timestamp, level, service, message, attributes
       FROM "Log"
       ${whereClause}
       ORDER BY timestamp DESC, id DESC
