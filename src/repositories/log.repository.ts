@@ -1,6 +1,10 @@
 import { Prisma, type Log } from "@prisma/client";
 import prisma, { pool } from "../database/prisma.js";
-import { buildAggregateQuery, mapAggregateRows } from "./aggregate.builder.js";
+import {
+  buildAggregateQuery,
+  buildRollupAggregateQuery,
+  mapAggregateRows,
+} from "./aggregate.builder.js";
 import { attributeFilter } from "./attribute-filter.js";
 import type {
   AggregateOptions,
@@ -97,25 +101,64 @@ export class LogRepository {
 
   private async insertBatch(logs: ValidatedLogInput[]) {
     await pool.query(
-      `INSERT INTO "Log" ("id", "timestamp", "level", "service", "message", "attributes", "createdAt")
-       SELECT
-         (
-           '00000000-0000-7000-8000-' ||
-           lpad(to_hex(nextval('"Log_id_seq"')), 12, '0')
-         )::uuid,
-         timestamp::timestamptz,
-         level::"LogLevel",
-         service,
-         message,
-         COALESCE(attributes, '{}'::jsonb),
-         NOW()
-       FROM jsonb_to_recordset($1::jsonb) AS input(
-         timestamp text,
-         level text,
-         service text,
-         message text,
-         attributes jsonb
-       )`,
+      `WITH payload AS (
+         SELECT
+           timestamp::timestamptz AS "timestamp",
+           level::"LogLevel" AS "level",
+           service,
+           message,
+           COALESCE(attributes, '{}'::jsonb) AS attributes
+         FROM jsonb_to_recordset($1::jsonb) AS input(
+           timestamp text,
+           level text,
+           service text,
+           message text,
+           attributes jsonb
+         )
+       ), inserted AS (
+         INSERT INTO "Log" ("id", "timestamp", "level", "service", "message", "attributes", "createdAt")
+         SELECT
+           (
+             '00000000-0000-7000-8000-' ||
+             lpad(to_hex(nextval('"Log_id_seq"')), 12, '0')
+           )::uuid,
+           "timestamp",
+           "level",
+           service,
+           message,
+           attributes,
+           NOW()
+         FROM payload
+         RETURNING "timestamp", "service", "level"
+       ), rollups AS (
+         SELECT
+           date_trunc('minute', "timestamp") AS "bucket",
+           date_trunc('second', "timestamp") AS "second_bucket",
+           "service",
+           "level",
+           COUNT(*)::bigint AS "count"
+         FROM inserted
+         GROUP BY 1, 2, 3, 4
+       ), minute_rollups AS (
+         SELECT "bucket", "service", "level", SUM("count")::bigint AS "count"
+         FROM rollups
+         GROUP BY 1, 2, 3
+       ), second_rollups AS (
+         SELECT "second_bucket" AS "bucket", "service", "level", "count"
+         FROM rollups
+       ), inserted_minutes AS (
+         INSERT INTO "LogRollup" ("bucket", "service", "level", "count")
+         SELECT "bucket", "service", "level", "count"
+         FROM minute_rollups
+         ON CONFLICT ("bucket", "service", "level")
+         DO UPDATE SET "count" = "LogRollup"."count" + EXCLUDED."count"
+         RETURNING 1
+       )
+       INSERT INTO "LogSecondRollup" ("bucket", "service", "level", "count")
+       SELECT "bucket", "service", "level", "count"
+       FROM second_rollups
+       ON CONFLICT ("bucket", "service", "level")
+       DO UPDATE SET "count" = "LogSecondRollup"."count" + EXCLUDED."count"`,
       [JSON.stringify(logs)],
     );
     return { count: logs.length };
@@ -175,7 +218,8 @@ export class LogRepository {
   }
 
   async aggregate(options: AggregateOptions) {
-    const sql = buildAggregateQuery(options);
+    const sql =
+      buildRollupAggregateQuery(options) ?? buildAggregateQuery(options);
     const rows =
       await prisma.$queryRaw<
         { bucket: Date; group: string | null; count: bigint }[]
