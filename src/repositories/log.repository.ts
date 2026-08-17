@@ -1,11 +1,10 @@
-import { Prisma, type Log } from "@prisma/client";
+import type { Log } from "@prisma/client";
 import prisma, { pool } from "../database/prisma.js";
 import {
   buildAggregateQuery,
   buildRollupAggregateQuery,
   mapAggregateRows,
 } from "./aggregate.builder.js";
-import { attributeFilter } from "./attribute-filter.js";
 import type {
   AggregateOptions,
   ValidatedLogInput,
@@ -165,55 +164,81 @@ export class LogRepository {
   }
 
   async findMany(options: LogQueryOptions, take: number): Promise<Log[]> {
-    const conditions: Prisma.Sql[] = [];
+    const conditions: string[] = [];
+    const values: unknown[] = [];
 
     if (options.service) {
-      conditions.push(Prisma.sql`service = ${options.service}`);
+      values.push(options.service);
+      conditions.push(`service = $${values.length}`);
     }
 
     if (options.level) {
-      conditions.push(Prisma.sql`level = ${options.level}::"LogLevel"`);
+      values.push(options.level);
+      conditions.push(`level = $${values.length}::"LogLevel"`);
     }
 
     if (options.since) {
-      conditions.push(Prisma.sql`timestamp >= ${options.since}`);
+      values.push(options.since);
+      conditions.push(`timestamp >= $${values.length}`);
     }
 
     if (options.until) {
-      conditions.push(Prisma.sql`timestamp < ${options.until}`);
+      values.push(options.until);
+      conditions.push(`timestamp < $${values.length}`);
     }
 
     for (const [key, value] of Object.entries(options.attrFilters)) {
-      conditions.push(attributeFilter(key, value));
+      values.push(key, value);
+      const kIdx = values.length - 1;
+      const vIdx = values.length;
+      if (value === "true" || value === "false") {
+        conditions.push(
+          `(attributes @> jsonb_build_object($${kIdx}::text, $${vIdx}::text) OR attributes @> jsonb_build_object($${kIdx}::text, $${vIdx}::text::boolean))`,
+        );
+      } else if (
+        Number.isFinite(Number(value)) &&
+        String(Number(value)) === value
+      ) {
+        conditions.push(
+          `(attributes @> jsonb_build_object($${kIdx}::text, $${vIdx}::text) OR attributes @> jsonb_build_object($${kIdx}::text, $${vIdx}::text::numeric))`,
+        );
+      } else {
+        conditions.push(
+          `attributes @> jsonb_build_object($${kIdx}::text, $${vIdx}::text)`,
+        );
+      }
     }
 
     if (options.q) {
-      conditions.push(
-        Prisma.sql`LOWER(message) LIKE ${`%${options.q.toLowerCase()}%`}`,
-      );
+      values.push(`%${options.q.toLowerCase()}%`);
+      conditions.push(`LOWER(message) LIKE $${values.length}`);
     }
 
     if (options.cursor) {
-      const cursorTimestamp = new Date(options.cursor.timestamp);
-      conditions.push(Prisma.sql`
-        ("timestamp", "id") < (${cursorTimestamp}::timestamp, ${options.cursor.id}::uuid)
-      `);
+      values.push(options.cursor.timestamp, options.cursor.id);
+      const tIdx = values.length - 1;
+      const idIdx = values.length;
+      conditions.push(
+        `("timestamp", "id") < ($${tIdx}::timestamptz, $${idIdx}::uuid)`,
+      );
     }
 
     const whereClause =
-      conditions.length > 0
-        ? Prisma.sql`WHERE ${Prisma.join(conditions, " AND ")}`
-        : Prisma.empty;
+      conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
-    const query = Prisma.sql`
+    values.push(take);
+    const limitIdx = values.length;
+
+    const sql = `
       SELECT id, timestamp, level, service, message, attributes
       FROM "Log"
       ${whereClause}
       ORDER BY timestamp DESC, id DESC
-      LIMIT ${take}
+      LIMIT $${limitIdx}
     `;
 
-    return prisma.$queryRaw<Log[]>(query);
+    const result = await pool.query<Log>(sql, values);
+    return result.rows;
   }
 
   async aggregate(options: AggregateOptions) {

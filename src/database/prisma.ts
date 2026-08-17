@@ -5,9 +5,9 @@ import pg from "pg";
 
 export const pool = new pg.Pool({
   connectionString: process.env["DATABASE_URL"],
-  max: 40,
+  max: 60,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 10000,
+  connectionTimeoutMillis: 15000,
 });
 
 const adapter = new PrismaPg(pool);

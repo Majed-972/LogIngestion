@@ -79,12 +79,24 @@ class LogService {
     );
 
     const hasNextPage = logs.length > limit;
-    const results = hasNextPage ? logs.slice(0, limit) : logs;
+    const rawResults = hasNextPage ? logs.slice(0, limit) : logs;
 
-    const lastLog = results[results.length - 1];
+    const results = rawResults.map((log) => ({
+      id: log.id,
+      timestamp:
+        log.timestamp instanceof Date
+          ? log.timestamp.toISOString()
+          : new Date(log.timestamp).toISOString(),
+      level: log.level,
+      service: log.service,
+      message: log.message,
+      attributes: (log.attributes as Record<string, unknown>) ?? {},
+    }));
+
+    const lastRawLog = rawResults[rawResults.length - 1];
     const next_cursor =
-      hasNextPage && lastLog
-        ? encodeCursor(lastLog.timestamp, lastLog.id)
+      hasNextPage && lastRawLog
+        ? encodeCursor(lastRawLog.timestamp, lastRawLog.id)
         : null;
 
     return { logs: results, next_cursor };

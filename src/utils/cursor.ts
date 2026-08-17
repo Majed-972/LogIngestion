@@ -3,12 +3,13 @@ type CursorData = {
   id: string;
 };
 
-const UUID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-export function encodeCursor(timestamp: Date, id: string): string {
+export function encodeCursor(timestamp: Date | string, id: string): string {
+  const tsStr =
+    timestamp instanceof Date
+      ? timestamp.toISOString()
+      : new Date(timestamp).toISOString();
   const data: CursorData = {
-    timestamp: timestamp.toISOString(),
+    timestamp: tsStr,
     id,
   };
   return Buffer.from(JSON.stringify(data)).toString("base64");
@@ -25,14 +26,15 @@ export function decodeCursor(cursor: string): CursorData {
       !("timestamp" in data) ||
       !("id" in data) ||
       typeof (data as CursorData).timestamp !== "string" ||
-      typeof (data as CursorData).id !== "string"
+      typeof (data as CursorData).id !== "string" ||
+      (data as CursorData).id.length === 0
     ) {
       throw new Error("Invalid cursor structure");
     }
 
     const cursorData = data as CursorData;
 
-    if (isNaN(Date.parse(cursorData.timestamp)) || !UUID.test(cursorData.id)) {
+    if (isNaN(Date.parse(cursorData.timestamp))) {
       throw new Error("Invalid cursor timestamp");
     }
 
