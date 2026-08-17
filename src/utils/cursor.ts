@@ -3,6 +3,8 @@ type CursorData = {
   id: string;
 };
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export function encodeCursor(timestamp: Date | string, id: string): string {
   const tsStr =
     timestamp instanceof Date
@@ -26,16 +28,15 @@ export function decodeCursor(cursor: string): CursorData {
       !("timestamp" in data) ||
       !("id" in data) ||
       typeof (data as CursorData).timestamp !== "string" ||
-      typeof (data as CursorData).id !== "string" ||
-      (data as CursorData).id.length === 0
+      typeof (data as CursorData).id !== "string"
     ) {
       throw new Error("Invalid cursor structure");
     }
 
     const cursorData = data as CursorData;
 
-    if (isNaN(Date.parse(cursorData.timestamp))) {
-      throw new Error("Invalid cursor timestamp");
+    if (isNaN(Date.parse(cursorData.timestamp)) || !UUID.test(cursorData.id)) {
+      throw new Error("Invalid cursor timestamp or id");
     }
 
     return cursorData;

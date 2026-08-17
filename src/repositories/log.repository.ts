@@ -4,6 +4,7 @@ import {
   buildAggregateQuery,
   buildRollupAggregateQuery,
   mapAggregateRows,
+  type AggregateRow,
 } from "./aggregate.builder.js";
 import type {
   AggregateOptions,
@@ -244,10 +245,7 @@ export class LogRepository {
   async aggregate(options: AggregateOptions) {
     const sql =
       buildRollupAggregateQuery(options) ?? buildAggregateQuery(options);
-    const rows =
-      await prisma.$queryRaw<
-        { bucket: Date; group: string | null; count: bigint }[]
-      >(sql);
+    const rows = await prisma.$queryRaw<AggregateRow[]>(sql);
     return mapAggregateRows(rows);
   }
 }

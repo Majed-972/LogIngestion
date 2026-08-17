@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import type { AggregateOptions } from "../types/log.types.js";
 import { attributeFilter } from "./attribute-filter.js";
 
-type AggregateRow = {
+export type AggregateRow = {
   bucket: Date;
   group: string | null;
   count: bigint;
